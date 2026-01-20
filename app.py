@@ -497,6 +497,13 @@ def main():
         
         ---
         *Version 1.2*
+        
+        ---
+        
+        ### Copyright & Legal
+        © 2026 Lin Zhang. All Rights Reserved.
+        
+        **Disclaimer:** This tool is provided "as is" without warranty of any kind. Users are responsible for verifying the output of processed documents.
         """)
         
 if __name__ == '__main__':
