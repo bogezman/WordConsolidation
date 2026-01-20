@@ -4,7 +4,46 @@ import io
 import re
 import os
 
-def process_docx(uploaded_file, new_author_name, new_initials):
+def extract_authors(uploaded_file):
+    """
+    Extracts a set of unique authors from the docx file.
+    """
+    authors = set()
+    
+    # Regex to find authors
+    # 1. Attribute-based: w:author="Value" or w:author='Value' (and w15:author)
+    pattern_attr_double = re.compile(rb'((?:w|w15):author=")([^"]*)(")')
+    pattern_attr_single = re.compile(rb"((?:w|w15):author=')([^']*)(')")
+    
+    # 2. Element-text based: <dc:creator>Value</dc:creator> or <cp:lastModifiedBy>Value</cp:lastModifiedBy>
+    # Note: These are in docProps/core.xml usually.
+    pattern_el_creator = re.compile(rb'(<dc:creator>)(.*?)(</dc:creator>)')
+    pattern_el_lastmod = re.compile(rb'(<cp:lastModifiedBy>)(.*?)(</cp:lastModifiedBy>)')
+
+    try:
+        with zipfile.ZipFile(uploaded_file, 'r') as zin:
+            for item in zin.infolist():
+                if item.filename.endswith('.xml'):
+                    content = zin.read(item.filename)
+                    
+                    # Attribute scan
+                    for match in pattern_attr_double.finditer(content):
+                        authors.add(match.group(2).decode('utf-8'))
+                    for match in pattern_attr_single.finditer(content):
+                        authors.add(match.group(2).decode('utf-8'))
+                    
+                    # Element scan
+                    for match in pattern_el_creator.finditer(content):
+                         authors.add(match.group(2).decode('utf-8'))
+                    for match in pattern_el_lastmod.finditer(content):
+                         authors.add(match.group(2).decode('utf-8'))
+                         
+    except Exception:
+        pass # Ignore errors during extraction to avoid breaking the flow if zip is bad (will be caught later)
+        
+    return sorted(list(authors))
+
+def process_docx(uploaded_file, target_authors, new_author_name, new_initials, remove_highlights=False):
     """
     Reads a docx file (as a zip), modifies XML content in memory to replace author names and initials,
     and returns a bytes object of the new docx file.
@@ -16,14 +55,20 @@ def process_docx(uploaded_file, new_author_name, new_initials):
     # We look for w:author="Value" and w:initials="Value"
     # Using byte strings for regex since we read files as bytes
     
-    # Build regex patterns handling both single and double quotes
-    # w:author
-    pattern_author_double = re.compile(rb'(w:author=")([^"]*)(")')
-    pattern_author_single = re.compile(rb"(w:author=')([^']*)(')")
+    pattern_author_double = re.compile(rb'((?:w|w15):author=")([^"]*)(")')
+    pattern_author_single = re.compile(rb"((?:w|w15):author=')([^']*)(')")
     
-    # w:initials
     pattern_initials_double = re.compile(rb'(w:initials=")([^"]*)(")')
     pattern_initials_single = re.compile(rb"(w:initials=')([^']*)(')")
+
+    # Metadata element patterns
+    pattern_el_creator = re.compile(rb'(<dc:creator>)(.*?)(</dc:creator>)')
+    pattern_el_lastmod = re.compile(rb'(<cp:lastModifiedBy>)(.*?)(</cp:lastModifiedBy>)')
+
+    # Highlight patterns
+    # Matches <w:highlight ... /> or <w15:highlight ... />
+    # We want to remove the entire tag.
+    pattern_highlight = re.compile(rb'(<w(?:15)?:highlight[^>]*/>)')
 
     # Convert new values to bytes (utf-8)
     new_author_bytes = new_author_name.encode('utf-8')
@@ -39,14 +84,30 @@ def process_docx(uploaded_file, new_author_name, new_initials):
                     # Usually these are word/document.xml, word/comments.xml, word/settings.xml, etc.
                     # To be safe and comprehensive, we can check typical xml files or just all .xml files.
                     if item.filename.endswith('.xml'):
-                        # Apply replacements
-                        # Replace author
-                        content = pattern_author_double.sub(rb'\g<1>' + new_author_bytes + rb'\g<3>', content)
-                        content = pattern_author_single.sub(rb'\g<1>' + new_author_bytes + rb'\g<3>', content)
                         
-                        # Replace initials
-                        content = pattern_initials_double.sub(rb'\g<1>' + new_initials_bytes + rb'\g<3>', content)
-                        content = pattern_initials_single.sub(rb'\g<1>' + new_initials_bytes + rb'\g<3>', content)
+                        if remove_highlights:
+                            # Remove highlight tags
+                            content = pattern_highlight.sub(rb'', content)
+                        
+                        # Only proceed with author replacement if target_authors is provided
+                        if target_authors:
+                            # Apply global string replacement for each selected author
+                            # This covers: attributes, metadata elements, AND body text/field results.
+                            for author in target_authors:
+                                author_bytes = author.encode('utf-8')
+                                # Simple replace
+                                # Note: This replaces ALL occurrences of the author name.
+                                if author_bytes in content:
+                                    content = content.replace(author_bytes, new_author_bytes)
+                            
+                            # We still run the regex for INITIALS separately because Initials are NOT in the target_authors list
+                            # (target_authors are full names). 
+                            # The user wants to replace "Zhang, Lin" (Author) -> "NewName".
+                            # Implicitly, they might want to replace Initials too.
+                            # Our previous logic replaced ALL initials blindly. We will keep that for safety/anonymization.
+                            
+                            content = pattern_initials_double.sub(rb'\g<1>' + new_initials_bytes + rb'\g<3>', content)
+                            content = pattern_initials_single.sub(rb'\g<1>' + new_initials_bytes + rb'\g<3>', content)
                     
                     # Write content (modified or original) to the new zip
                     zout.writestr(item, content)
@@ -84,10 +145,29 @@ def main():
         file_details = {"FileName": uploaded_file.name, "FileType": uploaded_file.type, "FileSize": f"{uploaded_file.size / 1024:.2f} KB"}
         st.write(file_details)
         
+        # Extract authors
+        all_authors = extract_authors(uploaded_file)
+        
+        # Author selection
+        st.subheader("Select Authors to Modify")
+        if not all_authors:
+            st.warning("No authors found in the document.")
+            target_authors = []
+        else:
+            target_authors = st.multiselect(
+                "Authors",
+                options=all_authors,
+                default=all_authors,
+                help="Deselect authors you want to keep unchanged."
+            )
+        
+        # Highlight removal option
+        remove_highlights = st.checkbox("Clear all highlights", value=False)
+        
         # Process button
         if st.button("Process Document"):
             with st.spinner("Processing document..."):
-                processed_data = process_docx(uploaded_file, new_name, new_initials)
+                processed_data = process_docx(uploaded_file, target_authors, new_name, new_initials, remove_highlights=remove_highlights)
                 
             if processed_data:
                 st.success("Processing complete!")
