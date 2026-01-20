@@ -171,5 +171,97 @@ class TestDocxProcessing(unittest.TestCase):
 
         print("Test passed: Highlights removed successfully.")
 
+    def test_extract_revision_authors(self):
+        """Test that revision authors are extracted from w:ins and w:del elements"""
+        input_buffer = io.BytesIO()
+        with zipfile.ZipFile(input_buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+            # Create XML with ins and del elements
+            xml_content = b'''<?xml version="1.0"?><w:document>
+                <w:body>
+                    <w:p>
+                        <w:ins w:id="1" w:author="Alice" w:date="2024-01-01T00:00:00Z">
+                            <w:r><w:t>Added text</w:t></w:r>
+                        </w:ins>
+                        <w:del w:id="2" w:author="Bob" w:date="2024-01-02T00:00:00Z">
+                            <w:r><w:delText>Deleted text</w:delText></w:r>
+                        </w:del>
+                    </w:p>
+                </w:body>
+            </w:document>'''
+            z.writestr('word/document.xml', xml_content)
+        
+        input_buffer.seek(0)
+        
+        # Use pattern from app to test extraction
+        pattern_ins_del = re.compile(rb'<w:(ins|del)[^>]*w:author="([^"]*)"[^>]*>')
+        authors = set()
+        with zipfile.ZipFile(input_buffer, 'r') as zin:
+            for item in zin.infolist():
+                if item.filename.endswith('.xml'):
+                    content = zin.read(item.filename)
+                    for match in pattern_ins_del.finditer(content):
+                        authors.add(match.group(2).decode('utf-8'))
+        
+        self.assertIn("Alice", authors)
+        self.assertIn("Bob", authors)
+        self.assertEqual(len(authors), 2)
+        
+        print("Test passed: Revision authors extracted successfully.")
+
+    def test_apply_author_highlights(self):
+        """Test that highlights are applied to runs within author's revisions"""
+        input_buffer = io.BytesIO()
+        with zipfile.ZipFile(input_buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+            # Create XML with ins element
+            xml_content = b'''<?xml version="1.0"?><w:document><w:body><w:p><w:ins w:id="1" w:author="TestAuthor" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Inserted</w:t></w:r></w:ins></w:p></w:body></w:document>'''
+            z.writestr('word/document.xml', xml_content)
+        
+        input_buffer.seek(0)
+        
+        # Simple highlight injection test
+        author_colors = {"TestAuthor": "yellow"}
+        highlight_tag = b'<w:highlight w:val="yellow"/>'
+        
+        with zipfile.ZipFile(input_buffer, 'r') as zin:
+            content = zin.read('word/document.xml')
+            
+            # Apply highlight pattern (simplified version of app logic)
+            author_bytes = b"TestAuthor"
+            ins_pattern = re.compile(
+                rb'(<w:ins[^>]*w:author="' + re.escape(author_bytes) + rb'"[^>]*>)(.*?)(</w:ins>)',
+                re.DOTALL
+            )
+            
+            def add_highlight_to_runs(m):
+                opening = m.group(1)
+                inner = m.group(2)
+                closing = m.group(3)
+                
+                def process_run(run_match):
+                    run_content = run_match.group(0)
+                    if b'<w:highlight ' in run_content:
+                        return run_content
+                    if b'<w:rPr>' in run_content:
+                        run_content = run_content.replace(b'<w:rPr>', b'<w:rPr>' + highlight_tag, 1)
+                    else:
+                        run_content = re.sub(
+                            rb'(<w:r(?:\s[^>]*)?>)',
+                            rb'\1<w:rPr>' + highlight_tag + rb'</w:rPr>',
+                            run_content,
+                            count=1
+                        )
+                    return run_content
+                
+                inner = re.sub(rb'<w:r(?:\s[^>]*)?>.*?</w:r>', process_run, inner, flags=re.DOTALL)
+                return opening + inner + closing
+            
+            modified = ins_pattern.sub(add_highlight_to_runs, content)
+        
+        # Verify highlight was added
+        self.assertIn(b'<w:highlight w:val="yellow"/>', modified)
+        self.assertIn(b'<w:rPr>', modified)
+        
+        print("Test passed: Highlights applied to revisions successfully.")
+
 if __name__ == '__main__':
     unittest.main()

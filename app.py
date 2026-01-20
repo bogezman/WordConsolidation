@@ -4,6 +4,47 @@ import io
 import re
 import os
 
+# Word standard highlight colors with their hex values for UI preview
+HIGHLIGHT_COLORS = {
+    "yellow": "#FFFF00",
+    "green": "#00FF00",
+    "cyan": "#00FFFF",
+    "magenta": "#FF00FF",
+    "blue": "#0000FF",
+    "red": "#FF0000",
+    "darkBlue": "#000080",
+    "darkCyan": "#008080",
+    "darkGreen": "#008000",
+    "darkMagenta": "#800080",
+    "darkRed": "#800000",
+    "darkYellow": "#808000",
+    "lightGray": "#C0C0C0",
+    "darkGray": "#808080",
+}
+
+def extract_revision_authors(uploaded_file):
+    """
+    Extracts unique authors from tracked changes (w:ins and w:del elements).
+    These are insertions and deletions, not comments or metadata.
+    """
+    authors = set()
+    
+    # Pattern to find w:ins or w:del elements with w:author attribute
+    # Matches: <w:ins ... w:author="Name" ...> or <w:del ... w:author="Name" ...>
+    pattern_ins_del = re.compile(rb'<w:(ins|del)[^>]*w:author="([^"]*)"[^>]*>')
+    
+    try:
+        with zipfile.ZipFile(uploaded_file, 'r') as zin:
+            for item in zin.infolist():
+                if item.filename.endswith('.xml'):
+                    content = zin.read(item.filename)
+                    for match in pattern_ins_del.finditer(content):
+                        authors.add(match.group(2).decode('utf-8'))
+    except Exception:
+        pass
+        
+    return sorted(list(authors))
+
 def extract_authors(uploaded_file):
     """
     Extracts a set of unique authors from the docx file.
@@ -121,14 +162,121 @@ def process_docx(uploaded_file, target_authors, new_author_name, new_initials, r
         st.error(f"An unexpected error occurred: {e}")
         return None
 
+def apply_author_highlights(uploaded_file, author_colors):
+    """
+    Applies highlight colors to tracked changes (insertions/deletions) by specific authors.
+    
+    Args:
+        uploaded_file: The docx file as a file-like object
+        author_colors: Dict mapping author name to highlight color name (e.g., {'John': 'yellow'})
+    
+    Returns:
+        Bytes of the modified docx file, or None on error
+    """
+    output_buffer = io.BytesIO()
+    
+    try:
+        with zipfile.ZipFile(uploaded_file, 'r') as zin:
+            with zipfile.ZipFile(output_buffer, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    content = zin.read(item.filename)
+                    
+                    if item.filename.endswith('.xml'):
+                        # Process each author's revisions
+                        for author, color in author_colors.items():
+                            author_bytes = author.encode('utf-8')
+                            highlight_tag = f'<w:highlight w:val="{color}"/>'.encode('utf-8')
+                            
+                            # Pattern to find w:ins or w:del elements for this author
+                            # We need to add highlight to runs inside these elements
+                            # Strategy: Find <w:ins...author="Name"...>...</w:ins> blocks
+                            # and inject highlight into their <w:rPr> elements
+                            
+                            # Match w:ins or w:del opening tag with this author
+                            pattern = rb'(<w:(ins|del)[^>]*w:author="' + re.escape(author_bytes) + rb'"[^>]*>)'
+                            
+                            def inject_highlight(match_obj):
+                                """Process the content after matching w:ins/w:del tag"""
+                                return match_obj.group(0)
+                            
+                            # More robust approach: find all runs within ins/del by author
+                            # and add highlight to their run properties
+                            
+                            # Pattern for ins/del block with author
+                            ins_pattern = re.compile(
+                                rb'(<w:ins[^>]*w:author="' + re.escape(author_bytes) + rb'"[^>]*>)(.*?)(</w:ins>)',
+                                re.DOTALL
+                            )
+                            del_pattern = re.compile(
+                                rb'(<w:del[^>]*w:author="' + re.escape(author_bytes) + rb'"[^>]*>)(.*?)(</w:del>)',
+                                re.DOTALL
+                            )
+                            
+                            def add_highlight_to_runs(m):
+                                """Add highlight to all w:r elements within the matched block"""
+                                opening = m.group(1)
+                                inner = m.group(2)
+                                closing = m.group(3)
+                                
+                                # Find w:r elements and add highlight to w:rPr
+                                # Pattern: <w:r>...<w:rPr>...</w:rPr>...<w:t>...</w:t>...</w:r>
+                                # or <w:r>...<w:t>...</w:t>...</w:r> (no rPr)
+                                
+                                def process_run(run_match):
+                                    run_content = run_match.group(0)
+                                    
+                                    # Remove any existing highlight tag before adding new one
+                                    run_content = re.sub(rb'<w:highlight[^>]*/>', b'', run_content)
+                                    
+                                    # Check if has w:rPr
+                                    if b'<w:rPr>' in run_content:
+                                        # Insert highlight after <w:rPr>
+                                        run_content = run_content.replace(b'<w:rPr>', b'<w:rPr>' + highlight_tag, 1)
+                                    elif b'<w:rPr ' in run_content:
+                                        # Handle <w:rPr ...> with attributes
+                                        run_content = re.sub(
+                                            rb'(<w:rPr[^>]*>)',
+                                            rb'\1' + highlight_tag,
+                                            run_content,
+                                            count=1
+                                        )
+                                    else:
+                                        # No w:rPr, need to add one after <w:r> or <w:r ...>
+                                        run_content = re.sub(
+                                            rb'(<w:r(?:\s[^>]*)?>)',
+                                            rb'\1<w:rPr>' + highlight_tag + rb'</w:rPr>',
+                                            run_content,
+                                            count=1
+                                        )
+                                    return run_content
+                                
+                                # Match w:r elements (including w:r with attributes)
+                                inner = re.sub(rb'<w:r(?:\s[^>]*)?>.*?</w:r>', process_run, inner, flags=re.DOTALL)
+                                
+                                return opening + inner + closing
+                            
+                            content = ins_pattern.sub(add_highlight_to_runs, content)
+                            content = del_pattern.sub(add_highlight_to_runs, content)
+                    
+                    zout.writestr(item, content)
+                    
+        return output_buffer.getvalue()
+        
+    except zipfile.BadZipFile:
+        st.error("Error: The uploaded file is not a valid docx or zip file.")
+        return None
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return None
+
 def main():
     st.set_page_config(page_title="WordConsolidation", page_icon="📝")
     
     st.title("WordConsolidation 📝")
     
-    tab_tool, tab_about = st.tabs(["Tool", "About"])
+    tab_sanitize, tab_highlight_rev, tab_about = st.tabs(["Sanitize", "Highlight Revisions", "About"])
     
-    with tab_tool:
+    with tab_sanitize:
         st.markdown("""
         Upload a `.docx` file to automatically replace all revision authors and comment authors with your specified name.
         
@@ -186,6 +334,116 @@ def main():
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
 
+    with tab_highlight_rev:
+        st.header("Highlight Author Revisions 🖍️")
+        st.info("🧪 **Experimental Feature** - This feature is new and may have limitations with complex documents.")
+        st.markdown("""
+        Upload a `.docx` file to highlight tracked changes (insertions and deletions) by specific authors.
+        
+        **How it works:** Select authors and assign them Word-standard highlight colors. 
+        The tool will apply highlighting to all their additions and deletions.
+        """)
+        
+        # File uploader for highlight tab
+        highlight_file = st.file_uploader("Choose a Word Document", type=["docx"], key="highlight_uploader")
+        
+        if highlight_file is not None:
+            # Show file details
+            file_details = {"FileName": highlight_file.name, "FileType": highlight_file.type, "FileSize": f"{highlight_file.size / 1024:.2f} KB"}
+            st.write(file_details)
+            
+            # Extract revision authors
+            revision_authors = extract_revision_authors(highlight_file)
+            
+            if not revision_authors:
+                st.warning("No tracked changes found in this document. Make sure the document has revisions (insertions/deletions).")
+            else:
+                st.subheader("Select Authors & Assign Colors")
+                
+                # Create color options with preview
+                color_options = list(HIGHLIGHT_COLORS.keys())
+                
+                # Store author-color mappings
+                author_color_selections = {}
+                
+                # Create a grid of author selections with color pickers
+                for idx, author in enumerate(revision_authors):
+                    col1, col2, col3, col4 = st.columns([0.5, 2, 2.5, 0.5])
+                    
+                    with col1:
+                        # Checkbox to include this author
+                        include = st.checkbox("", value=True, key=f"include_{idx}")
+                    
+                    with col2:
+                        st.write(f"**{author}**")
+                    
+                    with col3:
+                        if include:
+                            # Color selector with preview
+                            color_name = st.selectbox(
+                                "Color",
+                                options=color_options,
+                                index=idx % len(color_options),  # Rotate default colors
+                                key=f"color_{idx}",
+                                label_visibility="collapsed"
+                            )
+                            author_color_selections[author] = color_name
+                    
+                    with col4:
+                        if include:
+                            # Show color preview inline
+                            hex_color = HIGHLIGHT_COLORS[color_name]
+                            st.markdown(
+                                f'<div style="width:100%;height:38px;background-color:{hex_color};border-radius:4px;border:1px solid #ccc;margin-top:0px;"></div>',
+                                unsafe_allow_html=True
+                            )
+                
+                # Color legend
+                with st.expander("View All Available Colors"):
+                    legend_cols = st.columns(4)
+                    for i, (name, hex_val) in enumerate(HIGHLIGHT_COLORS.items()):
+                        with legend_cols[i % 4]:
+                            st.markdown(
+                                f'<div style="display:flex;align-items:center;margin:4px 0;">'
+                                f'<div style="width:20px;height:20px;background-color:{hex_val};border-radius:3px;border:1px solid #ccc;margin-right:8px;"></div>'
+                                f'<span style="font-size:12px;">{name}</span></div>',
+                                unsafe_allow_html=True
+                            )
+                
+                # Process button
+                if st.button("Apply Highlights", key="apply_highlights_btn"):
+                    if not author_color_selections:
+                        st.warning("Please select at least one author to highlight.")
+                    else:
+                        with st.spinner("Applying highlights..."):
+                            # Reset file position
+                            highlight_file.seek(0)
+                            processed_data = apply_author_highlights(highlight_file, author_color_selections)
+                        
+                        if processed_data:
+                            st.success("Highlights applied successfully!")
+                            
+                            # Preview what was done
+                            st.write("**Applied highlights:**")
+                            for author, color in author_color_selections.items():
+                                hex_val = HIGHLIGHT_COLORS[color]
+                                st.markdown(
+                                    f'<div style="display:flex;align-items:center;margin:4px 0;">'
+                                    f'<div style="width:16px;height:16px;background-color:{hex_val};border-radius:2px;border:1px solid #ccc;margin-right:8px;"></div>'
+                                    f'<span>{author}</span></div>',
+                                    unsafe_allow_html=True
+                                )
+                            
+                            # Download button
+                            new_filename = f"highlighted_{highlight_file.name}"
+                            st.download_button(
+                                label="Download Highlighted Document",
+                                data=processed_data,
+                                file_name=new_filename,
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="download_highlighted"
+                            )
+
     with tab_about:
         st.header("About WordConsolidation")
         st.markdown("""
@@ -210,21 +468,35 @@ def main():
         - Remove all highlighter formatting from the text.
         - Useful for finalizing documents after review sessions.
         
-        #### 4. Privacy First 🔒
+        #### 4. Revision Highlighting 🖍️ *(NEW)*
+        Visually identify changes by specific authors.
+        - Upload a document with tracked changes.
+        - Select authors and assign Word-standard highlight colors.
+        - Additions and deletions by those authors get highlighted.
+        - Color preview swatches help you pick the right color.
+        
+        #### 5. Privacy First 🔒
         - **No Data Retention:** Files are processed entirely in-memory.
         - **Secure:** Your original files are never saved to our servers. once you close the tab, the data is gone.
         
         ---
         
         ### How to Use
-        1. **Upload** your `.docx` file in the **Tool** tab.
+        
+        **Sanitize Tab** (Anonymization & Cleanup):
+        1. **Upload** your `.docx` file in the **Sanitize** tab.
         2. **Configure** the new name and initials in the sidebar (default: "Reviewer").
         3. **Select** the authors you wish to replace from the list.
         4. (Optional) Check **Clear all highlights** to remove highlighting.
         5. Click **Process Document** and download your sanitized file.
         
+        **Highlight Revisions Tab** (Revision Highlighting):
+        1. **Upload** your `.docx` file in the **Highlight Revisions** tab.
+        2. **Select authors** and assign colors using the dropdowns.
+        3. Click **Apply Highlights** and download the highlighted file.
+        
         ---
-        *Version 1.1*
+        *Version 1.2*
         """)
         
 if __name__ == '__main__':
