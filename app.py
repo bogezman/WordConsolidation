@@ -501,7 +501,7 @@ def main():
         ---
         
         ### Copyright & Legal
-        © 2026 Lin Zhang. All Rights Reserved.
+        © 2026 Lin ZHANG. All Rights Reserved.
         
         **Disclaimer:** This tool is provided "as is" without warranty of any kind. Users are responsible for verifying the output of processed documents.
         """)
