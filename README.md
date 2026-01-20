@@ -36,11 +36,22 @@ Open your browser and navigate to: http://localhost:8501
 If you prefer running without Docker:
 
 1.  Ensure you have Python 3.9+ installed.
-2.  Install dependencies:
+2.  Create and activate a virtual environment (Recommended):
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+3.  Install dependencies:
     ```bash
     pip install -r requirements.txt
     ```
-3.  Run the app:
+4.  Run the app (easiest method):
     ```bash
+    ./run_app.sh
+    ```
+    
+    Or manually:
+    ```bash
+    source venv/bin/activate
     python3 -m streamlit run app.py
     ```
