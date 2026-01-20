@@ -280,6 +280,8 @@ def main():
         st.markdown("""
         Upload a `.docx` file to automatically replace all revision authors and comment authors with your specified name.
         
+        You can also **clear all highlights** from the document to remove any existing color highlighting.
+        
         **Privacy Note:** All processing is done in-memory. Your files are not saved to the server.
         """)
         
