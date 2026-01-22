@@ -362,6 +362,14 @@ def main():
             else:
                 st.subheader("Select Authors & Assign Colors")
                 
+                # Callback for Select All
+                def toggle_all():
+                    val = st.session_state.select_all_authors
+                    for i in range(len(revision_authors)):
+                        st.session_state[f"include_{i}"] = val
+
+                st.checkbox("Select All", value=True, key="select_all_authors", on_change=toggle_all)
+                
                 # Create color options with preview
                 color_options = list(HIGHLIGHT_COLORS.keys())
                 
