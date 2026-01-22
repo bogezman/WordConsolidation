@@ -382,7 +382,11 @@ def main():
                     
                     with col1:
                         # Checkbox to include this author
-                        include = st.checkbox("", value=True, key=f"include_{idx}")
+                        # Avoid "widget with key... created with default value" warning
+                        if f"include_{idx}" not in st.session_state:
+                             st.session_state[f"include_{idx}"] = True
+                        
+                        include = st.checkbox("", key=f"include_{idx}")
                     
                     with col2:
                         st.write(f"**{author}**")
