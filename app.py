@@ -338,7 +338,13 @@ def main():
 
     with tab_highlight_rev:
         st.header("Highlight Author Revisions 🖍️")
-        st.info("🧪 **Experimental Feature** - This feature is new and may have limitations with complex documents.")
+        # Better layout for experimental info and recommendation
+        col_info1, col_info2 = st.columns([1, 1])
+        with col_info1:
+            st.info("🧪 **Experimental Feature**\n\nThis feature is new and may have limitations with complex documents.")
+        with col_info2:
+            st.warning("⚠️ **Recommendation**\n\nStrongly recommend **Clear Highlight** before applying new highlights.")
+
         st.markdown("""
         Upload a `.docx` file to highlight tracked changes (insertions and deletions) by specific authors.
         
