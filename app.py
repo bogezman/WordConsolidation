@@ -124,7 +124,8 @@ def process_docx(uploaded_file, target_authors, new_author_name, new_initials, r
                     # We only want to modify XML files that might contain author info.
                     # Usually these are word/document.xml, word/comments.xml, word/settings.xml, etc.
                     # To be safe and comprehensive, we can check typical xml files or just all .xml files.
-                    if item.filename.endswith('.xml'):
+                    # SKIP people.xml to avoid duplicate author entries when multiple users edit with same name
+                    if item.filename.endswith('.xml') and item.filename != 'word/people.xml':
                         
                         if remove_highlights:
                             # Remove highlight tags
@@ -181,7 +182,8 @@ def apply_author_highlights(uploaded_file, author_colors):
                 for item in zin.infolist():
                     content = zin.read(item.filename)
                     
-                    if item.filename.endswith('.xml'):
+                    # Skip people.xml to avoid any modifications to presence info
+                    if item.filename.endswith('.xml') and item.filename != 'word/people.xml':
                         # Process each author's revisions
                         for author, color in author_colors.items():
                             author_bytes = author.encode('utf-8')
