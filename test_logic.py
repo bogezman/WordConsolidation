@@ -18,13 +18,13 @@ def extract_authors_logic(uploaded_file):
                 if item.filename.endswith('.xml'):
                     content = zin.read(item.filename)
                     for match in pattern_attr_double.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
                     for match in pattern_attr_single.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
                     for match in pattern_el_creator.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
                     for match in pattern_el_lastmod.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
     except Exception:
         pass
     return sorted(list(authors))

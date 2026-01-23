@@ -39,7 +39,7 @@ def extract_revision_authors(uploaded_file):
                 if item.filename.endswith('.xml'):
                     content = zin.read(item.filename)
                     for match in pattern_ins_del.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
     except Exception:
         pass
         
@@ -69,15 +69,15 @@ def extract_authors(uploaded_file):
                     
                     # Attribute scan
                     for match in pattern_attr_double.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
                     for match in pattern_attr_single.finditer(content):
-                        authors.add(match.group(2).decode('utf-8'))
+                        authors.add(match.group(2).decode('utf-8').strip())
                     
                     # Element scan
                     for match in pattern_el_creator.finditer(content):
-                         authors.add(match.group(2).decode('utf-8'))
+                         authors.add(match.group(2).decode('utf-8').strip())
                     for match in pattern_el_lastmod.finditer(content):
-                         authors.add(match.group(2).decode('utf-8'))
+                         authors.add(match.group(2).decode('utf-8').strip())
                          
     except Exception:
         pass # Ignore errors during extraction to avoid breaking the flow if zip is bad (will be caught later)
@@ -276,6 +276,15 @@ def main():
     
     tab_sanitize, tab_highlight_rev, tab_about = st.tabs(["Sanitize", "Highlight Revisions", "About"])
     
+    # State management callbacks
+    def reset_sanitize_state():
+        st.session_state.pop('sanitized_data', None)
+        st.session_state.pop('sanitized_filename', None)
+
+    def reset_highlight_state():
+        st.session_state.pop('highlighted_data', None)
+        st.session_state.pop('highlighted_filename', None)
+    
     with tab_sanitize:
         st.markdown("""
         Upload a `.docx` file to automatically replace all revision authors and comment authors with your specified name.
@@ -293,7 +302,7 @@ def main():
             new_initials = st.text_input("New Initials", value="REV")
         
         # File uploader
-        uploaded_file = st.file_uploader("Choose a Word Document", type=["docx"])
+        uploaded_file = st.file_uploader("Choose a Word Document", type=["docx"], key="sanitize_uploader", on_change=reset_sanitize_state)
         
         if uploaded_file is not None:
             # Show file details
@@ -325,16 +334,19 @@ def main():
                     processed_data = process_docx(uploaded_file, target_authors, new_name, new_initials, remove_highlights=remove_highlights)
                     
                 if processed_data:
-                    st.success("Processing complete!")
+                    st.session_state['sanitized_data'] = processed_data
+                    st.session_state['sanitized_filename'] = f"consolidated_{uploaded_file.name}"
                     
-                    # Create a download button
-                    new_filename = f"consolidated_{uploaded_file.name}"
-                    st.download_button(
-                        label="Download Consolidated Document",
-                        data=processed_data,
-                        file_name=new_filename,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+            if 'sanitized_data' in st.session_state:
+                st.success("Processing complete!")
+                
+                # Create a download button
+                st.download_button(
+                    label="Download Consolidated Document",
+                    data=st.session_state['sanitized_data'],
+                    file_name=st.session_state['sanitized_filename'],
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
 
     with tab_highlight_rev:
         st.header("Highlight Author Revisions 🖍️")
@@ -353,7 +365,7 @@ def main():
         """)
         
         # File uploader for highlight tab
-        highlight_file = st.file_uploader("Choose a Word Document", type=["docx"], key="highlight_uploader")
+        highlight_file = st.file_uploader("Choose a Word Document", type=["docx"], key="highlight_uploader", on_change=reset_highlight_state)
         
         if highlight_file is not None:
             # Show file details
@@ -441,28 +453,38 @@ def main():
                             processed_data = apply_author_highlights(highlight_file, author_color_selections)
                         
                         if processed_data:
-                            st.success("Highlights applied successfully!")
-                            
-                            # Preview what was done
-                            st.write("**Applied highlights:**")
-                            for author, color in author_color_selections.items():
-                                hex_val = HIGHLIGHT_COLORS[color]
-                                st.markdown(
-                                    f'<div style="display:flex;align-items:center;margin:4px 0;">'
-                                    f'<div style="width:16px;height:16px;background-color:{hex_val};border-radius:2px;border:1px solid #ccc;margin-right:8px;"></div>'
-                                    f'<span>{author}</span></div>',
-                                    unsafe_allow_html=True
-                                )
-                            
-                            # Download button
-                            new_filename = f"highlighted_{highlight_file.name}"
-                            st.download_button(
-                                label="Download Highlighted Document",
-                                data=processed_data,
-                                file_name=new_filename,
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key="download_highlighted"
-                            )
+                            st.session_state['highlighted_data'] = processed_data
+                            st.session_state['highlighted_filename'] = f"highlighted_{highlight_file.name}"
+                            st.session_state['prev_color_selections'] = author_color_selections
+
+                if 'highlighted_data' in st.session_state:
+                    st.success("Highlights applied successfully!")
+                    
+                    # Preview what was done
+                    st.write("**Applied highlights:**")
+                    # Use saved selections or current? Ideally saved to match data.
+                    # If we simply recreate, it should be fine if user didn't change selection.
+                    # But for robustness, let's use saved if available or fallback.
+                     
+                    current_selections = st.session_state.get('prev_color_selections', author_color_selections)
+                    
+                    for author, color in current_selections.items():
+                        hex_val = HIGHLIGHT_COLORS[color]
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;margin:4px 0;">'
+                            f'<div style="width:16px;height:16px;background-color:{hex_val};border-radius:2px;border:1px solid #ccc;margin-right:8px;"></div>'
+                            f'<span>{author}</span></div>',
+                            unsafe_allow_html=True
+                        )
+                    
+                    # Download button
+                    st.download_button(
+                        label="Download Highlighted Document",
+                        data=st.session_state['highlighted_data'],
+                        file_name=st.session_state['highlighted_filename'],
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="download_highlighted"
+                    )
 
     with tab_about:
         st.header("About WordConsolidation")
