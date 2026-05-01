@@ -300,8 +300,8 @@ def main():
         # Usually sidebar config is fine to stay global or be defined here.
         with st.sidebar:
             st.header("Configuration")
-            new_name = st.text_input("New Author Name", value="Reviewer")
-            new_initials = st.text_input("New Initials", value="REV")
+            new_name = st.text_input("New Author Name", value="BR/TSD/FMD")
+            new_initials = st.text_input("New Initials", value="FMD")
         
         # File uploader
         uploaded_file = st.file_uploader("Choose a Word Document", type=["docx"], key="sanitize_uploader", on_change=reset_sanitize_state)
